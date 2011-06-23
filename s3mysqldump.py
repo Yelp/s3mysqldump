@@ -27,13 +27,13 @@ import sys
 import tempfile
 
 import boto
+import boto.pyami.config
 
 
 log = logging.getLogger('s3mysqldump')
 
 
 DEFAULT_MYSQLDUMP_BIN = 'mysqldump'
-DEFAULT_S3_ENDPOINT = 's3.amazonaws.com'
 DEFAULT_MYSQLDUMP_OPTS = [
     '--compact',
     '--complete-insert',
@@ -62,10 +62,17 @@ def main(args=None):
     if key_prefix and not key_prefix.endswith('/'):
         key_prefix += '/'
 
-    # set up connection to boto. This could be nicer
+    # TODO: move this into its own function
+    s3_kwargs = {}
+    if options.s3_endpoint:
+        s3_kwargs['host'] = options.s3_endpoint
     if options.boto_cfg:
-        os.environ['BOTO_CONFIG'] = options.boto_cfg
-    s3_conn = boto.connect_s3(host=options.s3_endpoint)
+        boto_cfg = boto.pyami.config.Config(path=options.boto_cfg)
+        s3_kwargs['aws_access_key_id'] = boto_cfg.get(
+            'Credentials', 'aws_access_key_id')
+        s3_kwargs['aws_secret_access_key'] = boto_cfg.get(
+            'Credentials', 'aws_secret_access_key')
+    s3_conn = boto.connect_s3(**s3_kwargs)
     bucket = s3_conn.get_bucket(bucket_name)
 
     for table in tables:
@@ -158,8 +165,8 @@ def make_option_parser():
         action='store_true',
         help="Don't print to stderr")
     option_parser.add_option(
-        '--s3-endpoint', dest='s3_endpoint', default=DEFAULT_S3_ENDPOINT,
-        help='alternate S3 endpoint to connect to (e.g. us-west-1.elasticmapreduce.amazonaws.com). Default: %d')
+        '--s3-endpoint', dest='s3_endpoint', default=None,
+        help='alternate S3 endpoint to connect to (e.g. us-west-1.elasticmapreduce.amazonaws.com).')
     option_parser.add_option(
         '--utc', dest='utc', default=False, action='store_true',
         help='Use UTC rather than local time to process s3_uri_format')
