@@ -30,6 +30,11 @@ import boto
 import boto.pyami.config
 
 
+__author__ = 'David Marin <dave@yelp.com>'
+
+__version__ = '0.1'
+
+
 log = logging.getLogger('s3mysqldump')
 
 
@@ -154,7 +159,7 @@ def make_option_parser():
     option_parser.add_option(
         '--mysqldump-bin', dest='mysqldump_bin',
         default=DEFAULT_MYSQLDUMP_BIN,
-        help='path to mysqldump binary (default: %d)')
+        help='alternate path to mysqldump binary')
     option_parser.add_option(
         '-M', '--mysqldump-extra-opts', dest='mysqldump_extra_opts',
         default=DEFAULT_MYSQLDUMP_BIN,

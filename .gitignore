@@ -1,0 +1,8 @@
+.#*
+*.pyc
+*~
+*.swp
+
+build
+dist
+dateglob.egg-info
