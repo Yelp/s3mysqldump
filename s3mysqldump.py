@@ -67,17 +67,7 @@ def main(args=None):
     if key_prefix and not key_prefix.endswith('/'):
         key_prefix += '/'
 
-    # TODO: move this into its own function
-    s3_kwargs = {}
-    if options.s3_endpoint:
-        s3_kwargs['host'] = options.s3_endpoint
-    if options.boto_cfg:
-        boto_cfg = boto.pyami.config.Config(path=options.boto_cfg)
-        s3_kwargs['aws_access_key_id'] = boto_cfg.get(
-            'Credentials', 'aws_access_key_id')
-        s3_kwargs['aws_secret_access_key'] = boto_cfg.get(
-            'Credentials', 'aws_secret_access_key')
-    s3_conn = boto.connect_s3(**s3_kwargs)
+    s3_conn = connect_s3(boto_cfg=options.boto_cfg, host=options.s3_endpoint)
     bucket = s3_conn.get_bucket(bucket_name)
 
     for table in tables:
@@ -95,13 +85,14 @@ def main(args=None):
         log.info('dumping %s.%s -> s3://%s/%s' %
                  (database, table, bucket_name, key_name))
         with tempfile.NamedTemporaryFile(prefix=table + '.sql-') as f:
-            # this does its own logging
+            # dump to a temp file
             mysqldump_to_file(
                 database, table, f,
                 mysqldump_bin=options.mysqldump_bin,
                 extra_opts=options.mysqldump_extra_opts)
 
-            log.debug(' %s -> s3://%s/%s' %
+            # upload to S3
+            log.debug('  %s -> s3://%s/%s' %
                      (f.name, bucket_name, key_name))
             s3_key.set_contents_from_file(f)
 
@@ -133,6 +124,22 @@ def parse_args(args=None):
     return database, tables, s3_uri, options
 
 
+def connect_s3(boto_cfg=None, **kwargs):
+    """Make a connection to S3 using :py:mod:`boto` and return it.
+
+    :param string boto_cfg: Optional path to boto.cfg file to read credentials from
+    :param kwargs: Optional additional keyword args to pass to :py:func:`boto.connect_s3`. Keyword args set to ``None`` will be filtered out (so we can use boto's defaults).
+    """
+    if boto_cfg:
+        configs = boto.pyami.config.Config(path=boto_cfg)
+        kwargs['aws_access_key_id'] = configs.get(
+            'Credentials', 'aws_access_key_id')
+        kwargs['aws_secret_access_key'] = configs.get(
+            'Credentials', 'aws_secret_access_key')
+    kwargs = dict((k, v) for k, v in kwargs.iteritems() if v is not None)
+    return boto.connect_s3(**kwargs)
+
+
 def make_option_parser():
     usage = '%prog [options] database table1 [table2 ...] s3_uri_format'
     description = ('Dump one or more MySQL tables to S3.' +
@@ -162,7 +169,7 @@ def make_option_parser():
         help='alternate path to mysqldump binary')
     option_parser.add_option(
         '-M', '--mysqldump-extra-opts', dest='mysqldump_extra_opts',
-        default=DEFAULT_MYSQLDUMP_BIN,
+        default=None,
         help='extra args to pass to mysqldump (e.g. "-e -v"). If you want' +
         " to pass in passwords, use -m (see above).")
     option_parser.add_option(
@@ -269,7 +276,7 @@ def mysqldump_to_file(database, table, file, mysqldump_bin=None, my_cnf=None, ex
     args.append(table)
 
     # do it!
-    log.debug(' %s > %s' % (
+    log.debug('  %s > %s' % (
         ' '.join(pipes.quote(arg) for arg in args),
         getattr(file, 'name', None) or repr(file)))
     subprocess.check_call(args, stdout=file)
