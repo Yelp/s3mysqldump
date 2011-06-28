@@ -18,7 +18,6 @@ from __future__ import with_statement
 import datetime
 import logging
 import optparse
-import os
 import pipes
 import re
 import shlex
@@ -48,7 +47,12 @@ DEFAULT_MYSQLDUMP_OPTS = [
     '--skip-opt',
 ]
 
+
 S3_URI_RE = re.compile(r'^s3n?://(.*?)/(.*)$')
+
+# match directives in a strftime format string (e.g. '%Y-%m-%d')
+# for fully correct handling of percent literals (e.g. don't match %T in %%T)
+STRFTIME_FIELD_RE = re.compile('%(.)')
 
 
 def main(args=None):
@@ -56,45 +60,84 @@ def main(args=None):
 
     :param list args: alternate command line arguments (normally we read from ``sys.argv[:1]``)
     """
-    database, tables, s3_uri, options = parse_args(args)
+    database, tables, s3_uri_format, options = parse_args(args)
+
+    # get current time
+    if options.utc:
+        now = datetime.datetime.utcnow()
+    else:
+        now = datetime.datetime.now()
 
     # set up logging
     if not options.quiet:
         log_to_stream(name='s3mysqldump', debug=options.verbose)
 
-    bucket_name, key_prefix = parse_s3_uri(s3_uri)
-    # make sure we put tables in their own "directory"
-    if key_prefix and not key_prefix.endswith('/'):
-        key_prefix += '/'
-
     s3_conn = connect_s3(boto_cfg=options.boto_cfg, host=options.s3_endpoint)
-    bucket = s3_conn.get_bucket(bucket_name)
 
-    for table in tables:
-        key_name = key_prefix + table + '.sql'
+    # helper function, to call once, or once per table, below
+    def mysqldump_to_s3(database, tables, s3_uri):
+        s3_key = make_s3_key(s3_conn, s3_uri, force=options.force)
+        if not s3_key:
+            log.warn('%s already exists; use --force to overwrite' % (s3_uri,))
+            return
 
-        # check if key already exists
-        s3_key = bucket.get_key(key_name)
-        if s3_key and not options.force:
-            log.warn('s3://%s/%s already exists; use --force to overwrite' %
-                     (bucket_name, key_name))
-            continue
-        elif not s3_key:
-            s3_key = bucket.new_key(key_name)
-
-        log.info('dumping %s.%s -> s3://%s/%s' %
-                 (database, table, bucket_name, key_name))
-        with tempfile.NamedTemporaryFile(prefix=table + '.sql-') as f:
+        log.info('dumping %s -> %s' % (table_desc(database, tables), s3_uri))
+        with tempfile.NamedTemporaryFile(prefix='s3mysqldump-') as f:
             # dump to a temp file
             mysqldump_to_file(
-                database, table, f,
+                database, tables, f,
                 mysqldump_bin=options.mysqldump_bin,
                 extra_opts=options.mysqldump_extra_opts)
 
             # upload to S3
-            log.debug('  %s -> s3://%s/%s' %
-                     (f.name, bucket_name, key_name))
+            log.debug('  %s -> %s' % (f.name, s3_uri))
             s3_key.set_contents_from_file(f)
+
+    if has_table_field(s3_uri_format):
+        for table in tables:
+            s3_uri = resolve_s3_uri_format(s3_uri_format, now, database, table)
+            mysqldump_to_s3(database, [table], s3_uri)
+    else:
+        s3_uri = resolve_s3_uri_format(s3_uri_format, now, database)
+        mysqldump_to_s3(database, tables, s3_uri)
+
+
+def table_desc(database, tables=None):
+    """Return a description of the given database and tables, for logging"""
+    if not tables:
+        return database
+    elif len(tables) == 1:
+        return '%s.%s' % (database, tables[0])
+    else:
+        return '%s.{%s}' % (database, ','.join(tables))
+
+
+def has_table_field(s3_uri_format):
+    """Check if s3_uri_format contains %T (which is meant to be replaced)
+    with table name. But don't accidentally consume percent literals
+    (e.g. ``%%T``).
+    """
+    return 'T' in STRFTIME_FIELD_RE.findall(s3_uri_format)
+
+
+def resolve_s3_uri_format(s3_uri_format, now, database, table=None):
+    """Run `:py:func`~datetime.datetime.strftime` on `s3_uri_format`,
+    and also replace ``%D`` with *database* and ``%T`` with table.
+
+    :param string s3_uri_format: s3 URI, possibly with strftime fields
+    :param now: current time, as a :py:class:`~datetime.datetime`
+    :param string database: database name.
+    :param string table: table name.
+    """
+    def replacer(match):
+        if match.group(1) == 'D':
+            return database
+        elif match.group(1) == 'T' and table is not None:
+            return table
+        else:
+            return match.group(0)
+
+    return now.strftime(STRFTIME_FIELD_RE.sub(replacer, s3_uri_format))
 
 
 def parse_args(args=None):
@@ -107,7 +150,7 @@ def parse_args(args=None):
     option_parser = make_option_parser()
     options, args = option_parser.parse_args(args)
 
-    if len(args) < 3:
+    if len(args) < 2:
         option_parser.print_help()
         sys.exit(1)
 
@@ -115,13 +158,12 @@ def parse_args(args=None):
     tables = args[1:-1]
     s3_uri_format = args[-1]
 
-    if options.utc:
-        now = datetime.datetime.utcnow()
-    else:
-        now = datetime.datetime.now()
-    s3_uri = now.strftime(s3_uri_format)
-  
-    return database, tables, s3_uri, options
+    if has_table_field(s3_uri_format) and not tables:
+        option_parser.print_usage()
+        print 'If you use %T, you must specify one or more tables'
+        sys.exit(1)
+
+    return database, tables, s3_uri_format, options
 
 
 def connect_s3(boto_cfg=None, **kwargs):
@@ -140,11 +182,31 @@ def connect_s3(boto_cfg=None, **kwargs):
     return boto.connect_s3(**kwargs)
 
 
+def make_s3_key(s3_conn, s3_uri, force=False):
+    """Make a new S3 key and return the corresponding boto object.
+
+    If the key already exists, we'll issue a warning and return ``None``
+    unless *force* is set to ``True``.
+    """
+    bucket_name, key_name = parse_s3_uri(s3_uri)
+    bucket = s3_conn.get_bucket(bucket_name)
+    s3_key = bucket.get_key(key_name)
+    if s3_key:
+        if force:
+            return s3_key
+        else:
+            return None
+    else:
+        return bucket.new_key(key_name)
+
+
 def make_option_parser():
-    usage = '%prog [options] database table1 [table2 ...] s3_uri_format'
+    usage = '%prog [options] [db_name [tbl_name ...]] s3_uri_format'
     description = ('Dump one or more MySQL tables to S3.' +
                    ' s3_uri_format may be a strftime() format string, e.g.' +
-                   ' s3://foo/%Y/%m/%d/, for daily (or hourly) dumps.')
+                   ' s3://foo/%Y/%m/%d/, for daily (or hourly) dumps. You can '
+                   ' also use %D for database name and %T for table name. '
+                   ' Using %T will create one key per table.')
     option_parser = optparse.OptionParser(usage=usage, description=description)
 
     # trying to pick short opt names that won't get confused with
@@ -236,12 +298,12 @@ def log_to_stream(name=None, stream=None, format=None, level=None, debug=False):
     logger.addHandler(handler)
 
 
-def mysqldump_to_file(database, table, file, mysqldump_bin=None, my_cnf=None, extra_opts=None):
+def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, extra_opts=None):
     """Run mysqldump on a single table and dump it to a file
 
-    :param string database: MySQL database name
-    :param string table: MySQL table name
     :param string file: file object to dump to
+    :param string database: MySQL database name
+    :param tables: sequence of zero or more MySQL table names. If empty, dump all tables in the database.
     :param string mysqldump_bin: alternate path to mysqldump binary
     :param string my_cnf: alternate path to my.cnf file containing options to 
     :param extra_opts: a list of additional arguments to pass to mysqldump (e.g. hostname, port, and credentials). This can also be a string; if so, we'll run :py:func:`shlex.split` on it.
@@ -273,7 +335,8 @@ def mysqldump_to_file(database, table, file, mysqldump_bin=None, my_cnf=None, ex
         args.extend(extra_opts)
     args.append('--') # don't allow stray args to be interpreted as db name
     args.append(database)
-    args.append(table)
+    if tables:
+        args.extend(tables)
 
     # do it!
     log.debug('  %s > %s' % (
