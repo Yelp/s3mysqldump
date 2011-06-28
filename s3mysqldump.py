@@ -155,21 +155,26 @@ def parse_args(args=None):
 
     :return: *database*, *tables*, *s3_uri*, *options*
     """
-    option_parser = make_option_parser()
-    options, args = option_parser.parse_args(args)
+    parser = make_option_parser()
+    options, args = parser.parse_args(args)
+
+    if len(args) == 0:
+        parser.print_help()
+        sys.exit()
 
     if len(args) < 2:
-        option_parser.print_help()
-        sys.exit(1)
+        parser.error('You must specify at least db_name and s3_uri_format')
 
     database = args[0]
     tables = args[1:-1]
     s3_uri_format = args[-1]
 
     if has_table_field(s3_uri_format) and not tables:
-        option_parser.print_usage()
-        print 'If you use %T, you must specify one or more tables'
-        sys.exit(1)
+        parser.error('If you use %T, you must specify one or more tables')
+
+    if not S3_URI_RE.match(s3_uri_format):
+        parser.error('Invalid s3_uri_format, must start with s3://: %r' %
+                     s3_uri_format)
 
     return database, tables, s3_uri_format, options
 
@@ -209,7 +214,7 @@ def make_s3_key(s3_conn, s3_uri):
 
 
 def make_option_parser():
-    usage = '%prog [options] [db_name [tbl_name ...]] s3_uri_format'
+    usage = '%prog [options] db_name [tbl_name ...] s3_uri_format'
     description = ('Dump one or more MySQL tables to S3.' +
                    ' s3_uri_format may be a strftime() format string, e.g.' +
                    ' s3://foo/%Y/%m/%d/, for daily (or hourly) dumps. You can '
