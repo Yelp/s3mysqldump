@@ -24,6 +24,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 
 import boto
 import boto.pyami.config
@@ -91,8 +92,13 @@ def main(args=None):
             # upload to S3 (if mysqldump worked!)
             if success:
                 log.debug('  %s -> %s' % (f.name, s3_uri))
+                start = time.time()
+
                 s3_key = make_s3_key(s3_conn, s3_uri)
-                s3_key.set_contents_from_file(f)
+                headers = {'Content-Encoding': 'gzip'} # save bandwidth?
+                s3_key.set_contents_from_file(f, headers=headers)
+
+                log.debug('  Done in %.1fs' % (time.time() - start))
 
     if has_table_field(s3_uri_format):
         for table in tables:
@@ -343,8 +349,17 @@ def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, e
     log.debug('  %s > %s' % (
         ' '.join(pipes.quote(arg) for arg in args),
         getattr(file, 'name', None) or repr(file)))
-    status = subprocess.call(args, stdout=file)
-    return not status
+
+    start = time.time()
+
+    returncode = subprocess.call(args, stdout=file)
+
+    if returncode:
+        log.debug('  Failed with returncode %d' % returncode)
+    else:
+        log.debug('  Done in %.1fs' % (time.time() - start))
+
+    return not returncode
 
 
 if __name__ == '__main__':
