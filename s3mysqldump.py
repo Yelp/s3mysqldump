@@ -76,22 +76,23 @@ def main(args=None):
 
     # helper function, to call once, or once per table, below
     def mysqldump_to_s3(database, tables, s3_uri):
-        s3_key = make_s3_key(s3_conn, s3_uri, force=options.force)
-        if not s3_key:
+        if not options.force and s3_key_exists(s3_conn, s3_uri):
             log.warn('%s already exists; use --force to overwrite' % (s3_uri,))
             return
 
         log.info('dumping %s -> %s' % (table_desc(database, tables), s3_uri))
         with tempfile.NamedTemporaryFile(prefix='s3mysqldump-') as f:
             # dump to a temp file
-            mysqldump_to_file(
+            success = mysqldump_to_file(
                 database, tables, f,
                 mysqldump_bin=options.mysqldump_bin,
                 extra_opts=options.mysqldump_extra_opts)
 
-            # upload to S3
-            log.debug('  %s -> %s' % (f.name, s3_uri))
-            s3_key.set_contents_from_file(f)
+            # upload to S3 (if mysqldump worked!)
+            if success:
+                log.debug('  %s -> %s' % (f.name, s3_uri))
+                s3_key = make_s3_key(s3_conn, s3_uri)
+                s3_key.set_contents_from_file(f)
 
     if has_table_field(s3_uri_format):
         for table in tables:
@@ -182,20 +183,20 @@ def connect_s3(boto_cfg=None, **kwargs):
     return boto.connect_s3(**kwargs)
 
 
-def make_s3_key(s3_conn, s3_uri, force=False):
-    """Make a new S3 key and return the corresponding boto object.
+def s3_key_exists(s3_conn, s3_uri):
+    bucket_name, key_name = parse_s3_uri(s3_uri)
+    bucket = s3_conn.get_bucket(bucket_name)
+    return bool(bucket.get_key(key_name))
 
-    If the key already exists, we'll issue a warning and return ``None``
-    unless *force* is set to ``True``.
+
+def make_s3_key(s3_conn, s3_uri):
+    """Get the S3 key corresponding *s3_uri*, creating it if it doesn't exist.
     """
     bucket_name, key_name = parse_s3_uri(s3_uri)
     bucket = s3_conn.get_bucket(bucket_name)
     s3_key = bucket.get_key(key_name)
     if s3_key:
-        if force:
-            return s3_key
-        else:
-            return None
+        return s3_key
     else:
         return bucket.new_key(key_name)
 
@@ -342,7 +343,8 @@ def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, e
     log.debug('  %s > %s' % (
         ' '.join(pipes.quote(arg) for arg in args),
         getattr(file, 'name', None) or repr(file)))
-    subprocess.check_call(args, stdout=file)
+    status = subprocess.call(args, stdout=file)
+    return not status
 
 
 if __name__ == '__main__':
