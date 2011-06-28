@@ -75,6 +75,8 @@ def main(args=None):
 
     s3_conn = connect_s3(boto_cfg=options.boto_cfg, host=options.s3_endpoint)
 
+    extra_opts = parse_opts(options.mysqldump_extra_opts)
+
     # helper function, to call once, or once per table, below
     def mysqldump_to_s3(database, tables, s3_uri):
         if not options.force and s3_key_exists(s3_conn, s3_uri):
@@ -88,7 +90,7 @@ def main(args=None):
                 database, tables, f,
                 mysqldump_bin=options.mysqldump_bin,
                 my_cnf=options.my_cnf,
-                extra_opts=options.mysqldump_extra_opts)
+                extra_opts=extra_opts)
 
             # upload to S3 (if mysqldump worked!)
             if success:
@@ -244,9 +246,9 @@ def make_option_parser():
         help='alternate path to mysqldump binary')
     option_parser.add_option(
         '-M', '--mysqldump-extra-opts', dest='mysqldump_extra_opts',
-        default=None,
-        help='extra args to pass to mysqldump (e.g. "-e -v"). If you want' +
-        " to pass in passwords, use -m (see above).")
+        default=[], action='append',
+        help='extra args to pass to mysqldump (e.g. "-e --comment -vvv").'
+        ' Use -m (see above) for passwords and other credentials.')
     option_parser.add_option(
         '-q', '--quiet', dest='quiet', default=False,
         action='store_true',
@@ -311,6 +313,16 @@ def log_to_stream(name=None, stream=None, format=None, level=None, debug=False):
     logger.addHandler(handler)
 
 
+def parse_opts(list_of_opts):
+    """Used to parse :option:`--mysql-extra-opts`. Take a list of strings
+    containing space-separated arguments, parse them, and return a list
+    of arguments."""
+    results = []
+    for opts in list_of_opts:
+        results.extend(shlex.split(opts))
+    return results
+
+
 def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, extra_opts=None):
     """Run mysqldump on a single table and dump it to a file
 
@@ -319,7 +331,7 @@ def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, e
     :param tables: sequence of zero or more MySQL table names. If empty, dump all tables in the database.
     :param string mysqldump_bin: alternate path to mysqldump binary
     :param string my_cnf: alternate path to my.cnf file containing options to 
-    :param extra_opts: a list of additional arguments to pass to mysqldump (e.g. hostname, port, and credentials). This can also be a string; if so, we'll run :py:func:`shlex.split` on it.
+    :param extra_opts: a list of additional arguments to pass to mysqldump (e.g. hostname, port, and credentials).
 
     By default, we pass these arguments to mysqldump: ``--compact --complete-insert --default_character_set=utf8 --no-create-info --quick --skip-opt``
 
@@ -335,10 +347,6 @@ def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, e
 
     (you can override these options with *extra_opts*)
     """
-    # set up args to mysqldump
-    if isinstance(extra_opts, basestring):
-        extra_opts = shlex.split(extra_opts)
-    
     args = []
     args.append(mysqldump_bin or DEFAULT_MYSQLDUMP_BIN)
     # --defaults-file apparently has to go before any other options
