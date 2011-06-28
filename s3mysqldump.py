@@ -87,6 +87,7 @@ def main(args=None):
             success = mysqldump_to_file(
                 database, tables, f,
                 mysqldump_bin=options.mysqldump_bin,
+                my_cnf=options.my_cnf,
                 extra_opts=options.mysqldump_extra_opts)
 
             # upload to S3 (if mysqldump worked!)
@@ -335,11 +336,13 @@ def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, e
     
     args = []
     args.append(mysqldump_bin or DEFAULT_MYSQLDUMP_BIN)
-    args.extend(DEFAULT_MYSQLDUMP_OPTS)
+    # --defaults-file apparently has to go before any other options
     if my_cnf:
         args.append('--defaults-file=' + my_cnf)
+    args.extend(DEFAULT_MYSQLDUMP_OPTS)
     if extra_opts:
         args.extend(extra_opts)
+    args.append('--tables')
     args.append('--') # don't allow stray args to be interpreted as db name
     args.append(database)
     if tables:
