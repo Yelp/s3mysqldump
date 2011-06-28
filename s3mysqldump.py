@@ -98,7 +98,6 @@ def main(args=None):
                 start = time.time()
 
                 s3_key = make_s3_key(s3_conn, s3_uri)
-                headers = {'Content-Encoding': 'gzip'} # save bandwidth?
                 s3_key.set_contents_from_file(f, headers=headers)
 
                 log.debug('  Done in %.1fs' % (time.time() - start))
@@ -175,7 +174,7 @@ def parse_args(args=None):
         parser.error('If you use %T, you must specify one or more tables')
 
     if not S3_URI_RE.match(s3_uri_format):
-        parser.error('Invalid s3_uri_format, must start with s3://: %r' %
+        parser.error('Invalid s3_uri_format: %r' %
                      s3_uri_format)
 
     return database, tables, s3_uri_format, options
