@@ -59,18 +59,14 @@ S3_URI_RE = re.compile(r'^s3n?://(.*?)/(.*)$')
 STRFTIME_FIELD_RE = re.compile('%(.)')
 
 
-def main(args=None):
+def main(args):
     """Run the mysqldump utility.
 
     :param list args: alternate command line arguments (normally we read from ``sys.argv[:1]``)
     """
     databases, tables, s3_uri_format, options = parse_args(args)
 
-    # get current time
-    if options.utc:
-        now = datetime.datetime.utcnow()
-    else:
-        now = datetime.datetime.now()
+    now = get_current_time(utc=options.utc)
 
     # set up logging
     if not options.quiet:
@@ -120,6 +116,15 @@ def main(args=None):
     else:
         s3_uri = resolve_s3_uri_format(s3_uri_format, now)
         mysqldump_to_s3(s3_uri, databases, tables)
+
+
+def get_current_time(utc=False):
+    """Get the current time. This is broken out so we can monkey-patch
+    it for testing."""
+    if utc:
+        return datetime.datetime.utcnow()
+    else:
+        return datetime.datetime.now()
 
 
 def dump_desc(databases=None, tables=None):
@@ -173,7 +178,7 @@ def resolve_s3_uri_format(s3_uri_format, now, database=None, table=None):
     return now.strftime(STRFTIME_FIELD_RE.sub(replacer, s3_uri_format))
 
 
-def parse_args(args=None):
+def parse_args(args):
     """Parse command-line arguments
 
     :param list args: alternate command line arguments (normally we read from ``sys.argv[:1]``)
@@ -436,4 +441,4 @@ def mysqldump_to_file(file, databases=None, tables=None, mysqldump_bin=None, my_
 
 
 if __name__ == '__main__':
-    main()
+    main(sys.argv[:1])
