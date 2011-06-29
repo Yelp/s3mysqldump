@@ -39,10 +39,13 @@ log = logging.getLogger('s3mysqldump')
 
 
 DEFAULT_MYSQLDUMP_BIN = 'mysqldump'
-DEFAULT_MYSQLDUMP_OPTS = [
+
+YELP_FORMAT_OPTS = [
     '--compact',
     '--complete-insert',
     '--default_character_set=utf8',
+    '--hex-blob',
+    '--no-create-db',
     '--no-create-info',
     '--quick',
     '--skip-opt',
@@ -90,7 +93,8 @@ def main(args=None):
                 database, tables, f,
                 mysqldump_bin=options.mysqldump_bin,
                 my_cnf=options.my_cnf,
-                extra_opts=extra_opts)
+                extra_opts=extra_opts,
+                yelp_format=options.yelp_format)
 
             # upload to S3 (if mysqldump worked!)
             if success:
@@ -98,7 +102,7 @@ def main(args=None):
                 start = time.time()
 
                 s3_key = make_s3_key(s3_conn, s3_uri)
-                s3_key.set_contents_from_file(f, headers=headers)
+                s3_key.set_contents_from_file(f)
 
                 log.debug('  Done in %.1fs' % (time.time() - start))
 
@@ -262,6 +266,10 @@ def make_option_parser():
         '-v', '--verbose', dest='verbose', default=False,
         action='store_true',
         help='Print more messages')
+    option_parser.add_option(
+        '-Y', '--yelp-format', dest='yelp_format', default=False,
+        action='store_true',
+        help='Output single-row INSERT statements, and turn off locking, for easy data processing. Equivalent to -M "%s"' % ' '.join(YELP_FORMAT_OPTS))
 
     return option_parser
 
@@ -322,7 +330,7 @@ def parse_opts(list_of_opts):
     return results
 
 
-def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, extra_opts=None):
+def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, extra_opts=None, yelp_format=False):
     """Run mysqldump on a single table and dump it to a file
 
     :param string file: file object to dump to
@@ -331,27 +339,15 @@ def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, e
     :param string mysqldump_bin: alternate path to mysqldump binary
     :param string my_cnf: alternate path to my.cnf file containing options to 
     :param extra_opts: a list of additional arguments to pass to mysqldump (e.g. hostname, port, and credentials).
-
-    By default, we pass these arguments to mysqldump: ``--compact --complete-insert --default_character_set=utf8 --no-create-info --quick --skip-opt``
-
-    this creates a series of ``INSERT`` statements, one per line, and one row
-    per statement:
-
-    .. code-block:: sql
-
-        INSERT INTO `foo` (`id`, `first_name`, `last_name`) VALUES (1,'David	P','Marin');
-        INSERT INTO `foo` (`id`, `first_name`, `last_name`) VALUES (4,'foo\nbar',NULL);
-        INSERT INTO `foo` (`id`, `first_name`, `last_name`) VALUES (5,'Ezra\'s Awesome','Froggie');
-        ...
-
-    (you can override these options with *extra_opts*)
+    :param yelp_format: Dump rows in a format that's easy to use for data processing: INSERT statements only, with column names and one row per statement. Passes ``--compact --complete-insert --default_character_set=utf8 --hex-blob --no-create-db --no-create-info --quick --skip-opt`` to :command:`mysqldump`. Note this also turns off table locking. You can override any of this with *extra_opts*.
     """
     args = []
     args.append(mysqldump_bin or DEFAULT_MYSQLDUMP_BIN)
     # --defaults-file apparently has to go before any other options
     if my_cnf:
         args.append('--defaults-file=' + my_cnf)
-    args.extend(DEFAULT_MYSQLDUMP_OPTS)
+    if yelp_format:
+        args.extend(YELP_FORMAT_OPTS)
     if extra_opts:
         args.extend(extra_opts)
     args.append('--tables')
