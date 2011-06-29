@@ -64,7 +64,7 @@ def main(args=None):
 
     :param list args: alternate command line arguments (normally we read from ``sys.argv[:1]``)
     """
-    database, tables, s3_uri_format, options = parse_args(args)
+    databases, tables, s3_uri_format, options = parse_args(args)
 
     # get current time
     if options.utc:
@@ -81,16 +81,16 @@ def main(args=None):
     extra_opts = parse_opts(options.mysqldump_extra_opts)
 
     # helper function, to call once, or once per table, below
-    def mysqldump_to_s3(database, tables, s3_uri):
+    def mysqldump_to_s3(s3_uri, databases=None, tables=None):
         if not options.force and s3_key_exists(s3_conn, s3_uri):
             log.warn('%s already exists; use --force to overwrite' % (s3_uri,))
             return
 
-        log.info('dumping %s -> %s' % (table_desc(database, tables), s3_uri))
-        with tempfile.NamedTemporaryFile(prefix='s3mysqldump-') as f:
+        log.info('dumping %s -> %s' % (dump_desc(databases, tables), s3_uri))
+        with tempfile.NamedTemporaryFile(prefix='s3mysqldump-') as file:
             # dump to a temp file
             success = mysqldump_to_file(
-                database, tables, f,
+                file, databases, tables,
                 mysqldump_bin=options.mysqldump_bin,
                 my_cnf=options.my_cnf,
                 extra_opts=extra_opts,
@@ -98,31 +98,51 @@ def main(args=None):
 
             # upload to S3 (if mysqldump worked!)
             if success:
-                log.debug('  %s -> %s' % (f.name, s3_uri))
+                log.debug('  %s -> %s' % (file.name, s3_uri))
                 start = time.time()
 
                 s3_key = make_s3_key(s3_conn, s3_uri)
-                s3_key.set_contents_from_file(f)
+                s3_key.set_contents_from_file(file)
 
                 log.debug('  Done in %.1fs' % (time.time() - start))
 
+    # output to separate files, if specified by %T and %D
     if has_table_field(s3_uri_format):
+        assert len(databases) == 1
+        database = databases[0]
         for table in tables:
             s3_uri = resolve_s3_uri_format(s3_uri_format, now, database, table)
-            mysqldump_to_s3(database, [table], s3_uri)
+            mysqldump_to_s3(s3_uri, [database], [table])
+    elif has_database_field(s3_uri_format):
+        for database in databases:
+            s3_uri = resolve_s3_uri_format(s3_uri_format, now, database)
+            mysqldump_to_s3(s3_uri, [database])
     else:
-        s3_uri = resolve_s3_uri_format(s3_uri_format, now, database)
-        mysqldump_to_s3(database, tables, s3_uri)
+        s3_uri = resolve_s3_uri_format(s3_uri_format, now)
+        mysqldump_to_s3(s3_uri, databases, tables)
 
 
-def table_desc(database, tables=None):
+def dump_desc(databases=None, tables=None):
     """Return a description of the given database and tables, for logging"""
-    if not tables:
-        return database
+    if not databases:
+        return 'all databases'
+    elif not tables:
+        if len(databases) == 1:
+            return databases[0]
+        else:
+            return '{%s}' % ','.join(databases)
     elif len(tables) == 1:
-        return '%s.%s' % (database, tables[0])
+        return '%s.%s' % (databases[0], tables[0])
     else:
-        return '%s.{%s}' % (database, ','.join(tables))
+        return '%s.{%s}' % (databases[0], ','.join(tables))
+
+
+def has_database_field(s3_uri_format):
+    """Check if s3_uri_format contains %D (which is meant to be replaced)
+    with database name. But don't accidentally consume percent literals
+    (e.g. ``%%D``).
+    """
+    return 'D' in STRFTIME_FIELD_RE.findall(s3_uri_format)
 
 
 def has_table_field(s3_uri_format):
@@ -133,7 +153,7 @@ def has_table_field(s3_uri_format):
     return 'T' in STRFTIME_FIELD_RE.findall(s3_uri_format)
 
 
-def resolve_s3_uri_format(s3_uri_format, now, database, table=None):
+def resolve_s3_uri_format(s3_uri_format, now, database=None, table=None):
     """Run `:py:func`~datetime.datetime.strftime` on `s3_uri_format`,
     and also replace ``%D`` with *database* and ``%T`` with table.
 
@@ -143,7 +163,7 @@ def resolve_s3_uri_format(s3_uri_format, now, database, table=None):
     :param string table: table name.
     """
     def replacer(match):
-        if match.group(1) == 'D':
+        if match.group(1) == 'D' and database is not None:
             return database
         elif match.group(1) == 'T' and table is not None:
             return table
@@ -167,21 +187,36 @@ def parse_args(args=None):
         parser.print_help()
         sys.exit()
 
-    if len(args) < 2:
-        parser.error('You must specify at least db_name and s3_uri_format')
-
-    database = args[0]
-    tables = args[1:-1]
     s3_uri_format = args[-1]
+    if not S3_URI_RE.match(s3_uri_format):
+        parser.error('Invalid s3_uri_format: %r' % s3_uri_format)
+
+    if options.mode == 'tables':
+        if len(args) < 2:
+            parser.error('You must specify at least db_name and s3_uri_format')
+
+        databases = args[:1]
+        tables = args[1:-1]
+    elif options.mode == 'databases':
+        if len(args) < 2:
+            parser.error('You must specify at least db_name and s3_uri_format')
+
+        databases = args[:-1]
+        tables = None
+    else:
+        assert options.mode == 'all_databases'
+        if len(args) > 1:
+            parser.error("Don't specify database names with --all-databases")
+        databases = None
+        tables = None
 
     if has_table_field(s3_uri_format) and not tables:
         parser.error('If you use %T, you must specify one or more tables')
 
-    if not S3_URI_RE.match(s3_uri_format):
-        parser.error('Invalid s3_uri_format: %r' %
-                     s3_uri_format)
+    if has_database_field(s3_uri_format) and not databases:
+        parser.error('If you use %D, you must specify one or more databases (use %d for day of month)')
 
-    return database, tables, s3_uri_format, options
+    return databases, tables, s3_uri_format, options
 
 
 def connect_s3(boto_cfg=None, **kwargs):
@@ -230,6 +265,14 @@ def make_option_parser():
     # trying to pick short opt names that won't get confused with
     # the mysql options
     option_parser.add_option(
+        '-A', '--all-databases', dest='mode', default='tables',
+        action='store_const', const='all_databases',
+        help='Dump all tables from all databases.')
+    option_parser.add_option(
+        '-B', '--databases', dest='mode', default='tables',
+        action='store_const', const='databases',
+        help='Dump entire databases rather than tables')
+    option_parser.add_option(
         '-b', '--boto-cfg', dest='boto_cfg', default=None,
         help='Alternate path to boto.cfg file (for S3 credentials). See' +
         ' http://code.google.com/p/boto/wiki/BotoConfig for details. You'
@@ -256,6 +299,10 @@ def make_option_parser():
         '-q', '--quiet', dest='quiet', default=False,
         action='store_true',
         help="Don't print to stderr")
+    option_parser.add_option(
+        '--tables', dest='mode', default='tables',
+        action='store_const', const='tables',
+        help='Dump tables from one database (the default).')
     option_parser.add_option(
         '--s3-endpoint', dest='s3_endpoint', default=None,
         help='alternate S3 endpoint to connect to (e.g. us-west-1.elasticmapreduce.amazonaws.com).')
@@ -330,17 +377,24 @@ def parse_opts(list_of_opts):
     return results
 
 
-def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, extra_opts=None, yelp_format=False):
+def mysqldump_to_file(file, databases=None, tables=None, mysqldump_bin=None, my_cnf=None, extra_opts=None, yelp_format=False):
     """Run mysqldump on a single table and dump it to a file
 
     :param string file: file object to dump to
-    :param string database: MySQL database name
-    :param tables: sequence of zero or more MySQL table names. If empty, dump all tables in the database.
+    :param databases: sequence of MySQL database names, or ``None`` for all databases
+    :param tables: sequences of MySQL table names, or ``None`` for all tables. If you specify tables, there must be exactly one database name, due to limitations of :command:`mysqldump`
     :param string mysqldump_bin: alternate path to mysqldump binary
     :param string my_cnf: alternate path to my.cnf file containing options to 
     :param extra_opts: a list of additional arguments to pass to mysqldump (e.g. hostname, port, and credentials).
-    :param yelp_format: Dump rows in a format that's easy to use for data processing: INSERT statements only, with column names and one row per statement. Passes ``--compact --complete-insert --default_character_set=utf8 --hex-blob --no-create-db --no-create-info --quick --skip-opt`` to :command:`mysqldump`. Note this also turns off table locking. You can override any of this with *extra_opts*.
+    :param yelp_format: Output single-row INSERT statements, and turn off locking, for easy data processing.. Passes ``--compact --complete-insert --default_character_set=utf8 --hex-blob --no-create-db --no-create-info --quick --skip-opt`` to :command:`mysqldump`. Note this also turns off table locking. You can override any of this with *extra_opts*.
+
+    If you dump multiple databases in Yelp format, you will still get one
+    ``USE`` statement per database; :command:`mysqldump` doesn't have a way to
+    turn this off.
     """
+    if tables and (not databases or len(databases) != 1):
+        raise ValueError('If you specify tables you must specify exactly one database')
+
     args = []
     args.append(mysqldump_bin or DEFAULT_MYSQLDUMP_BIN)
     # --defaults-file apparently has to go before any other options
@@ -350,10 +404,18 @@ def mysqldump_to_file(database, tables, file, mysqldump_bin=None, my_cnf=None, e
         args.extend(YELP_FORMAT_OPTS)
     if extra_opts:
         args.extend(extra_opts)
-    args.append('--tables')
-    args.append('--') # don't allow stray args to be interpreted as db name
-    args.append(database)
-    if tables:
+
+    if not databases and not tables:
+        args.append('--all-databases')
+    elif len(databases) > 1 or tables is None:
+        args.append('--databases')
+        args.append('--')
+        args.extend(databases)
+    else:
+        assert len(databases) == 1
+        args.append('--tables')
+        args.append('--')
+        args.append(databases[0])
         args.extend(tables)
 
     # do it!
