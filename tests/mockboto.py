@@ -55,6 +55,8 @@ class MockS3Connection(object):
         """
         self.mock_s3_fs = {} if mock_s3_fs is None else mock_s3_fs
         self.endpoint = host or 's3.amazonaws.com'
+        self.aws_access_key_id = aws_access_key_id
+        self.aws_secret_access_key = aws_secret_access_key
 
     def get_bucket(self, bucket_name):
         if bucket_name in self.mock_s3_fs:

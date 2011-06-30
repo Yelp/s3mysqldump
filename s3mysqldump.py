@@ -112,7 +112,7 @@ def main(args):
     elif has_database_field(s3_uri_format):
         for database in databases:
             s3_uri = resolve_s3_uri_format(s3_uri_format, now, database)
-            mysqldump_to_s3(s3_uri, [database])
+            mysqldump_to_s3(s3_uri, [database], tables)
     else:
         s3_uri = resolve_s3_uri_format(s3_uri_format, now)
         mysqldump_to_s3(s3_uri, databases, tables)
