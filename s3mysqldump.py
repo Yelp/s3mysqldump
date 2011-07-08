@@ -15,9 +15,13 @@
 """
 from __future__ import with_statement
 
+__author__ = 'David Marin <dave@yelp.com>'
+__version__ = '0.1'
+
 import datetime
 import logging
 import optparse
+import os
 import pipes
 import re
 import shlex
@@ -30,17 +34,12 @@ import boto
 import boto.pyami.config
 
 
-__author__ = 'David Marin <dave@yelp.com>'
-
-__version__ = '0.1'
-
-
 log = logging.getLogger('s3mysqldump')
 
 
 DEFAULT_MYSQLDUMP_BIN = 'mysqldump'
 
-YELP_FORMAT_OPTS = [
+SINGLE_ROW_FORMAT_OPTS = [
     '--compact',
     '--complete-insert',
     '--default_character_set=utf8',
@@ -90,7 +89,7 @@ def main(args):
                 mysqldump_bin=options.mysqldump_bin,
                 my_cnf=options.my_cnf,
                 extra_opts=extra_opts,
-                yelp_format=options.yelp_format)
+                single_row_format=options.single_row_format)
 
             # upload to S3 (if mysqldump worked!)
             if success:
@@ -186,11 +185,12 @@ def parse_args(args):
     :return: *database*, *tables*, *s3_uri*, *options*
     """
     parser = make_option_parser()
-    options, args = parser.parse_args(args)
 
-    if len(args) == 0:
+    if not args:
         parser.print_help()
         sys.exit()
+
+    options, args = parser.parse_args(args)
 
     s3_uri_format = args[-1]
     if not S3_URI_RE.match(s3_uri_format):
@@ -290,7 +290,8 @@ def make_option_parser():
         '-m', '--my-cnf', dest='my_cnf', default=None,
         help='Alternate path to my.cnf (for MySQL credentials). See' +
         ' http://dev.mysql.com/doc/refman/5.5/en/option-files.html for' +
-        ' details.')
+        ' details. You can also specify this path in the environment'
+        ' variable MY_CNF.')
     option_parser.add_option(
         '--mysqldump-bin', dest='mysqldump_bin',
         default=DEFAULT_MYSQLDUMP_BIN,
@@ -312,16 +313,16 @@ def make_option_parser():
         '--s3-endpoint', dest='s3_endpoint', default=None,
         help='alternate S3 endpoint to connect to (e.g. us-west-1.elasticmapreduce.amazonaws.com).')
     option_parser.add_option(
+        '-s', '--single-row-format', dest='single_row_format', default=False,
+        action='store_true',
+        help='Output single-row INSERT statements, and turn off locking, for easy data processing. Equivalent to -M "%s"' % ' '.join(SINGLE_ROW_FORMAT_OPTS))
+    option_parser.add_option(
         '--utc', dest='utc', default=False, action='store_true',
         help='Use UTC rather than local time to process s3_uri_format')
     option_parser.add_option(
         '-v', '--verbose', dest='verbose', default=False,
         action='store_true',
         help='Print more messages')
-    option_parser.add_option(
-        '-Y', '--yelp-format', dest='yelp_format', default=False,
-        action='store_true',
-        help='Output single-row INSERT statements, and turn off locking, for easy data processing. Equivalent to -M "%s"' % ' '.join(YELP_FORMAT_OPTS))
 
     return option_parser
 
@@ -382,18 +383,18 @@ def parse_opts(list_of_opts):
     return results
 
 
-def mysqldump_to_file(file, databases=None, tables=None, mysqldump_bin=None, my_cnf=None, extra_opts=None, yelp_format=False):
+def mysqldump_to_file(file, databases=None, tables=None, mysqldump_bin=None, my_cnf=None, extra_opts=None, single_row_format=False):
     """Run mysqldump on a single table and dump it to a file
 
     :param string file: file object to dump to
     :param databases: sequence of MySQL database names, or ``None`` for all databases
     :param tables: sequences of MySQL table names, or ``None`` for all tables. If you specify tables, there must be exactly one database name, due to limitations of :command:`mysqldump`
     :param string mysqldump_bin: alternate path to mysqldump binary
-    :param string my_cnf: alternate path to my.cnf file containing options to 
+    :param string my_cnf: alternate path to my.cnf file containing MySQL credentials. If not set, this function will also try to read the environment variable :envvar:`MY_CNF`. 
     :param extra_opts: a list of additional arguments to pass to mysqldump (e.g. hostname, port, and credentials).
-    :param yelp_format: Output single-row INSERT statements, and turn off locking, for easy data processing.. Passes ``--compact --complete-insert --default_character_set=utf8 --hex-blob --no-create-db --no-create-info --quick --skip-opt`` to :command:`mysqldump`. Note this also turns off table locking. You can override any of this with *extra_opts*.
+    :param single_row_format: Output single-row INSERT statements, and turn off locking, for easy data processing.. Passes ``--compact --complete-insert --default_character_set=utf8 --hex-blob --no-create-db --no-create-info --quick --skip-opt`` to :command:`mysqldump`. Note this also turns off table locking. You can override any of this with *extra_opts*.
 
-    If you dump multiple databases in Yelp format, you will still get one
+    If you dump multiple databases in single-row format, you will still get one
     ``USE`` statement per database; :command:`mysqldump` doesn't have a way to
     turn this off.
     """
@@ -402,11 +403,15 @@ def mysqldump_to_file(file, databases=None, tables=None, mysqldump_bin=None, my_
 
     args = []
     args.append(mysqldump_bin or DEFAULT_MYSQLDUMP_BIN)
+
     # --defaults-file apparently has to go before any other options
     if my_cnf:
         args.append('--defaults-file=' + my_cnf)
-    if yelp_format:
-        args.extend(YELP_FORMAT_OPTS)
+    elif os.environ.get('MY_CNF'):
+        args.append('--defaults-file=' + os.environ['MY_CNF'])
+
+    if single_row_format:
+        args.extend(SINGLE_ROW_FORMAT_OPTS)
     if extra_opts:
         args.extend(extra_opts)
 
