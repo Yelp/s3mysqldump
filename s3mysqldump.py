@@ -47,7 +47,8 @@ SINGLE_ROW_FORMAT_OPTS = [
     '--no-create-db',
     '--no-create-info',
     '--quick',
-    '--skip-opt',
+    '--skip-lock-tables',
+    '--skip-extended-insert',
 ]
 
 
@@ -82,7 +83,7 @@ def main(args):
             return
 
         log.info('dumping %s -> %s' % (dump_desc(databases, tables), s3_uri))
-        with tempfile.NamedTemporaryFile(prefix='s3mysqldump-') as file:
+        with tempfile.NamedTemporaryFile(prefix='s3mysqldump-', dir=options.tempdir) as file:
             # dump to a temp file
             success = mysqldump_to_file(
                 file, databases, tables,
@@ -312,6 +313,9 @@ def make_option_parser():
     option_parser.add_option(
         '--s3-endpoint', dest='s3_endpoint', default=None,
         help='alternate S3 endpoint to connect to (e.g. us-west-1.elasticmapreduce.amazonaws.com).')
+    option_parser.add_option(
+        '--tempdir', dest='tempdir', default=None,
+        help='Directory to use for storing mysqldump on disk before uploading.')
     option_parser.add_option(
         '-s', '--single-row-format', dest='single_row_format', default=False,
         action='store_true',
