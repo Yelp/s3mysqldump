@@ -19,6 +19,7 @@ __author__ = 'David Marin <dave@yelp.com>'
 __version__ = '0.1'
 
 import datetime
+import glob
 import logging
 import optparse
 import os
@@ -49,10 +50,13 @@ SINGLE_ROW_FORMAT_OPTS = [
     '--quick',
     '--skip-lock-tables',
     '--skip-extended-insert',
+    # '--skip-opt', removing all opt options causes out of memory error on 5.0.91
 ]
 
 
 S3_URI_RE = re.compile(r'^s3n?://(.*?)/(.*)$')
+
+S3_MAX_PUT_SIZE = 4*1024*1024*1024 # actually 5G, but 4 to be safe
 
 # match directives in a strftime format string (e.g. '%Y-%m-%d')
 # for fully correct handling of percent literals (e.g. don't match %T in %%T)
@@ -83,7 +87,7 @@ def main(args):
             return
 
         log.info('dumping %s -> %s' % (dump_desc(databases, tables), s3_uri))
-        with tempfile.NamedTemporaryFile(prefix='s3mysqldump-', dir=options.tempdir) as file:
+        with tempfile.NamedTemporaryFile(prefix='s3mysqldump-') as file:
             # dump to a temp file
             success = mysqldump_to_file(
                 file, databases, tables,
@@ -98,7 +102,10 @@ def main(args):
                 start = time.time()
 
                 s3_key = make_s3_key(s3_conn, s3_uri)
-                s3_key.set_contents_from_file(file)
+                if os.path.getsize(file.name) > S3_MAX_PUT_SIZE:
+                    upload_multipart(s3_key, file.name)
+                else:
+                    s3_key.set_contents_from_file(file)
 
                 log.debug('  Done in %.1fs' % (time.time() - start))
 
@@ -259,6 +266,24 @@ def make_s3_key(s3_conn, s3_uri):
         return bucket.new_key(key_name)
 
 
+def upload_multipart(s3_key, large_file):
+    """Split up a large_file into chunks suitable for multipart upload, then
+    upload each chunk."""
+    split_dir = tempfile.mkdtemp(prefix='s3mysqldump-split-')
+    split_prefix = "%s/part-" % split_dir
+
+    args = ['split', "--bytes=%u" % S3_MAX_PUT_SIZE, large_file, split_prefix]
+    log.debug(' '.join(pipes.quote(arg) for arg in args))
+    subprocess.check_call(args)
+
+    mp = s3_key.bucket.initiate_multipart_upload(s3_key.name)
+    for part, filename in enumerate(glob.glob(split_prefix + '*')):
+        with open(filename, 'rb') as file:
+            mp.upload_part_from_file(file, part+1) # counting starts at 1
+
+    mp.complete_upload()
+
+
 def make_option_parser():
     usage = '%prog [options] db_name [tbl_name ...] s3_uri_format'
     description = ('Dump one or more MySQL tables to S3.' +
@@ -313,9 +338,6 @@ def make_option_parser():
     option_parser.add_option(
         '--s3-endpoint', dest='s3_endpoint', default=None,
         help='alternate S3 endpoint to connect to (e.g. us-west-1.elasticmapreduce.amazonaws.com).')
-    option_parser.add_option(
-        '--tempdir', dest='tempdir', default=None,
-        help='Directory to use for storing mysqldump on disk before uploading.')
     option_parser.add_option(
         '-s', '--single-row-format', dest='single_row_format', default=False,
         action='store_true',
@@ -396,7 +418,7 @@ def mysqldump_to_file(file, databases=None, tables=None, mysqldump_bin=None, my_
     :param string mysqldump_bin: alternate path to mysqldump binary
     :param string my_cnf: alternate path to my.cnf file containing MySQL credentials. If not set, this function will also try to read the environment variable :envvar:`MY_CNF`. 
     :param extra_opts: a list of additional arguments to pass to mysqldump (e.g. hostname, port, and credentials).
-    :param single_row_format: Output single-row INSERT statements, and turn off locking, for easy data processing.. Passes ``--compact --complete-insert --default_character_set=utf8 --hex-blob --no-create-db --no-create-info --quick --skip-opt`` to :command:`mysqldump`. Note this also turns off table locking. You can override any of this with *extra_opts*.
+    :param single_row_format: Output single-row INSERT statements, and turn off locking, for easy data processing.. Passes ``--compact --complete-insert --default_character_set=utf8 --hex-blob --no-create-db --no-create-info --quick --skip-lock-tables --skip-extended-insert`` to :command:`mysqldump`. Note this also turns off table locking. You can override any of this with *extra_opts*.
 
     If you dump multiple databases in single-row format, you will still get one
     ``USE`` statement per database; :command:`mysqldump` doesn't have a way to
