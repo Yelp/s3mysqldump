@@ -26,6 +26,7 @@ import os
 import pipes
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -105,6 +106,7 @@ def main(args):
                 if os.path.getsize(file.name) > S3_MAX_PUT_SIZE:
                     upload_multipart(s3_key, file.name)
                 else:
+                    log.debug('Upload to %r' % s3_key)
                     s3_key.set_contents_from_file(file)
 
                 log.debug('  Done in %.1fs' % (time.time() - start))
@@ -272,16 +274,19 @@ def upload_multipart(s3_key, large_file):
     split_dir = tempfile.mkdtemp(prefix='s3mysqldump-split-')
     split_prefix = "%s/part-" % split_dir
 
-    args = ['split', "--bytes=%u" % S3_MAX_PUT_SIZE, large_file, split_prefix]
+    args = ['split', "--line-bytes=%u" % S3_MAX_PUT_SIZE, '--suffix-length=4', large_file, split_prefix]
     log.debug(' '.join(pipes.quote(arg) for arg in args))
     subprocess.check_call(args)
 
     mp = s3_key.bucket.initiate_multipart_upload(s3_key.name)
-    for part, filename in enumerate(glob.glob(split_prefix + '*')):
+    log.debug('Multipart upload to %r' % s3_key)
+    for part, filename in enumerate(sorted(glob.glob(split_prefix + '*'))):
         with open(filename, 'rb') as file:
             mp.upload_part_from_file(file, part+1) # counting starts at 1
 
     mp.complete_upload()
+
+    shutil.rmtree(split_dir, True)
 
 
 def make_option_parser():
@@ -472,4 +477,4 @@ def mysqldump_to_file(file, databases=None, tables=None, mysqldump_bin=None, my_
 
 
 if __name__ == '__main__':
-    main(sys.argv[:1])
+    main(sys.argv[1:])
