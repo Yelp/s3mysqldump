@@ -24,6 +24,7 @@ from __future__ import with_statement
 
 import boto.exception
 
+
 ### S3 ###
 
 def add_mock_s3_data(mock_s3_fs, data):
