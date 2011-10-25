@@ -300,9 +300,9 @@ def upload_multipart(s3_key, large_file):
 
 def make_option_parser():
     usage = '%prog [options] db_name [tbl_name ...] s3_uri_format'
-    description = ('Dump one or more MySQL tables to S3.' +
-                   ' s3_uri_format may be a strftime() format string, e.g.' +
-                   ' s3://foo/%Y/%m/%d/, for daily (or hourly) dumps. You can '
+    description = ('Dump one or more MySQL tables to S3.'
+                   ' s3_uri_format may be a strftime() format string, e.g.'
+                   ' s3://foo/%Y/%m/%d/, for daily (or hourly) dumps. You can'
                    ' also use %D for database name and %T for table name. '
                    ' Using %T will create one key per table.')
     option_parser = optparse.OptionParser(usage=usage, description=description)
