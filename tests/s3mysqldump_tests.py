@@ -79,7 +79,7 @@ class MockS3AndMysqldumpTestCase(TestCase):
             if 'aws_access_key_id' in kwargs:
                 self.aws_access_key_id = kwargs['aws_access_key_id']
             if 'aws_secret_access_key' in kwargs:
-                self.aws_access_key_id = kwargs['aws_access_key_id']
+                self.aws_secret_access_key = kwargs['aws_secret_access_key']
 
             return MockS3Connection(*args, **kwargs)
 
