@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import socket
 
 import boto
 import boto.pyami.config
@@ -107,8 +108,7 @@ def main(args):
                     upload_multipart(s3_key, file.name)
                 else:
                     log.debug('Upload to %r' % s3_key)
-                    s3_key.set_contents_from_file(file)
-
+                    upload_singlepart(s3_key, file.name)
                 log.debug('  Done in %.1fs' % (time.time() - start))
 
     # output to separate files, if specified by %T and %D
@@ -267,6 +267,12 @@ def make_s3_key(s3_conn, s3_uri):
     else:
         return bucket.new_key(key_name)
 
+def sleeping_callback(t):
+    """Return a callback function that sleeps for t seconds"""
+    return lambda _,__: time.sleep(t)
+
+S3_ATTEMPTS = 4  # number of times to retry failed uploads
+S3_THROTTLE = 60 # number of times to throttle during upload
 
 def upload_multipart(s3_key, large_file):
     """Split up a large_file into chunks suitable for multipart upload, then
@@ -274,7 +280,7 @@ def upload_multipart(s3_key, large_file):
     split_dir = tempfile.mkdtemp(prefix='s3mysqldump-split-')
     split_prefix = "%s/part-" % split_dir
 
-    args = ['split', "--line-bytes=%u" % S3_MAX_PUT_SIZE, '--suffix-length=4', large_file, split_prefix]
+    args = ['split', "--line-bytes=%u" % S3_MAX_PUT_SIZE, '--suffix-length=5', '-d', large_file, split_prefix]
     log.debug(' '.join(pipes.quote(arg) for arg in args))
     subprocess.check_call(args)
 
@@ -282,11 +288,32 @@ def upload_multipart(s3_key, large_file):
     log.debug('Multipart upload to %r' % s3_key)
     for part, filename in enumerate(sorted(glob.glob(split_prefix + '*'))):
         with open(filename, 'rb') as file:
-            mp.upload_part_from_file(file, part+1) # counting starts at 1
+            for t in xrange(S3_ATTEMPTS):
+                try:
+                    mp.upload_part_from_file(file, part+1, cb=sleeping_callback(t), num_cb=S3_THROTTLE) # counting starts at 1
+                    log.debug('Part %s uploaded to %r' % (part+1, s3_key))
+                    break
+                except socket.error as e:
+                    log.warn('Part %s, upload attempt %s/%s: upload_part_from_file raised %r' %
+                            (part+1, t, S3_ATTEMPTS, e))
+            else:
+                raise socket.error("Upload failed")
 
     mp.complete_upload()
 
     shutil.rmtree(split_dir, True)
+
+def upload_singlepart(s3_key, filename):
+    """Upload a normal sized file.  Retry with sleeping callbacks when throttled by S3."""
+    for t in xrange(S3_ATTEMPTS):
+        try:
+            s3_key.set_contents_from_filename(filename, cb=sleeping_callback(t), num_cb=S3_THROTTLE)
+            break
+        except socket.error as e:
+            log.warn('Upload attempt %s/%s: set_contents_from_file raised %r' %
+                    (t, S3_ATTEMPTS, e))
+    else:
+        raise socket.error("Upload failed")
 
 
 def make_option_parser():
