@@ -24,6 +24,7 @@ from __future__ import with_statement
 
 import boto.exception
 
+
 ### S3 ###
 
 def add_mock_s3_data(mock_s3_fs, data):
@@ -108,8 +109,9 @@ class MockKey(object):
         self.bucket = bucket
         self.name = name
 
-    def set_contents_from_file(self, f):
+    def set_contents_from_filename(self, filename, cb=None, num_cb=0):
         mock_s3_fs = self.bucket.connection.mock_s3_fs
-        f.seek(0)
-        contents = f.read()
-        mock_s3_fs[self.bucket.name][self.name] = contents
+        with open(filename) as f:
+            f.seek(0)
+            contents = f.read()
+            mock_s3_fs[self.bucket.name][self.name] = contents

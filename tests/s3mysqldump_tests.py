@@ -24,6 +24,7 @@ from testify import teardown
 from tests.mockboto import MockS3Connection
 from tests.mockboto import add_mock_s3_data
 
+
 class MockS3AndMysqldumpTestCase(TestCase):
 
     @setup
@@ -42,7 +43,7 @@ class MockS3AndMysqldumpTestCase(TestCase):
         """
         self.times_help_printed = 0
         self.parser_errors = []
-        
+
         real_make_option_parser = s3mysqldump.make_option_parser
 
         def fake_print_help():
@@ -51,7 +52,7 @@ class MockS3AndMysqldumpTestCase(TestCase):
         def fake_error(msg):
             self.parser_errors.append(msg)
             sys.exit(1)
-        
+
         def wrapper():
             parser = real_make_option_parser()
             parser.print_help = fake_print_help
@@ -78,7 +79,7 @@ class MockS3AndMysqldumpTestCase(TestCase):
             if 'aws_access_key_id' in kwargs:
                 self.aws_access_key_id = kwargs['aws_access_key_id']
             if 'aws_secret_access_key' in kwargs:
-                self.aws_access_key_id = kwargs['aws_access_key_id']
+                self.aws_secret_access_key = kwargs['aws_secret_access_key']
 
             return MockS3Connection(*args, **kwargs)
 
@@ -170,7 +171,7 @@ class TestTablesAndDatabases(MockS3AndMysqldumpTestCase):
     def test_percent_T_on_one_table(self):
         s3mysqldump.main(['foo', 'bar', 's3://walrus/%T.sql'])
         self.check_s3('walrus', 'bar.sql', '--tables -- foo bar')
-        
+
     def test_percent_D_and_T_on_one_table(self):
         s3mysqldump.main(['foo', 'bar', 's3://walrus/%D/%T.sql'])
         self.check_s3('walrus', 'foo/bar.sql', '--tables -- foo bar')
@@ -186,18 +187,18 @@ class TestTablesAndDatabases(MockS3AndMysqldumpTestCase):
         self.check_s3('walrus', 'bar.sql', '--tables -- foo bar')
         self.check_s3('walrus', 'baz.sql', '--tables -- foo baz')
         self.check_s3('walrus', 'qux.sql', '--tables -- foo qux')
-        
+
     def test_percent_D_and_T_on_many_tables(self):
         s3mysqldump.main(['foo', 'bar', 'baz', 'qux',
                           's3://walrus/%D/%T.sql'])
         self.check_s3('walrus', 'foo/bar.sql', '--tables -- foo bar')
         self.check_s3('walrus', 'foo/baz.sql', '--tables -- foo baz')
         self.check_s3('walrus', 'foo/qux.sql', '--tables -- foo qux')
-        
+
     def test_one_database(self):
         s3mysqldump.main(['-B', 'foo', 's3://walrus/foo.sql'])
         self.check_s3('walrus', 'foo.sql', '--databases -- foo')
-        
+
     def test_percent_D_with_one_database(self):
         s3mysqldump.main(['-B', 'foo', 's3://walrus/%D.sql'])
         self.check_s3('walrus', 'foo.sql', '--databases -- foo')
@@ -294,12 +295,6 @@ class TestBotoConfig(MockS3AndMysqldumpTestCase):
         s3mysqldump.main(['-b', self.boto_cfg, 'foo', 's3://walrus/foo.sql'])
         assert_equal(self.aws_access_key_id, '12345678910')
         assert_equal(self.aws_secret_access_key, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
-        
-            
-
-        
-
-    
 
 
 if __name__ == '__main__':
