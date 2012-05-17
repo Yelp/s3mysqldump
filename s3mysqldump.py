@@ -274,12 +274,14 @@ def make_s3_key(s3_conn, s3_uri):
     else:
         return bucket.new_key(key_name)
 
+
 def sleeping_callback(t):
     """Return a callback function that sleeps for t seconds"""
-    return lambda _,__: time.sleep(t)
+    return lambda _, __: time.sleep(t)
 
-S3_ATTEMPTS = 4  # number of times to retry failed uploads
-S3_THROTTLE = 60 # number of times to throttle during upload
+S3_ATTEMPTS = 4   # number of times to retry failed uploads
+S3_THROTTLE = 60  # number of times to throttle during upload
+
 
 def sleeping_callback(t):
     """Return a callback function that sleeps for t seconds"""
@@ -325,11 +327,18 @@ def upload_multipart(s3_key, large_file):
 
     shutil.rmtree(split_dir, True)
 
+
 def upload_singlepart(s3_key, filename):
-    """Upload a normal sized file.  Retry with sleeping callbacks when throttled by S3."""
+    """Upload a normal sized file.  Retry with sleeping callbacks when
+    throttled by S3.
+    """
     for t in xrange(S3_ATTEMPTS):
         try:
-            s3_key.set_contents_from_filename(filename, cb=sleeping_callback(t), num_cb=S3_THROTTLE)
+            s3_key.set_contents_from_filename(
+                filename,
+                cb=sleeping_callback(t),
+                num_cb=S3_THROTTLE
+            )
             break
         except socket.error as e:
             log.warn('Upload attempt %s/%s: set_contents_from_file raised %r' %
