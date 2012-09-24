@@ -283,14 +283,6 @@ S3_ATTEMPTS = 4   # number of times to retry failed uploads
 S3_THROTTLE = 60  # number of times to throttle during upload
 
 
-def sleeping_callback(t):
-    """Return a callback function that sleeps for t seconds"""
-    return lambda _, __: time.sleep(t)
-
-S3_ATTEMPTS = 4   # number of times to retry failed uploads
-S3_THROTTLE = 60  # number of times to throttle during upload
-
-
 def upload_multipart(s3_key, large_file):
     """Split up a large_file into chunks suitable for multipart upload, then
     upload each chunk."""
@@ -326,25 +318,6 @@ def upload_multipart(s3_key, large_file):
     mp.complete_upload()
 
     shutil.rmtree(split_dir, True)
-
-
-def upload_singlepart(s3_key, filename):
-    """Upload a normal sized file.  Retry with sleeping callbacks when
-    throttled by S3.
-    """
-    for t in xrange(S3_ATTEMPTS):
-        try:
-            s3_key.set_contents_from_filename(
-                filename,
-                cb=sleeping_callback(t),
-                num_cb=S3_THROTTLE
-            )
-            break
-        except socket.error as e:
-            log.warn('Upload attempt %s/%s: set_contents_from_file raised %r' %
-                    (t, S3_ATTEMPTS, e))
-    else:
-        raise socket.error("Upload failed")
 
 
 def upload_singlepart(s3_key, filename):
