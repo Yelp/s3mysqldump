@@ -291,29 +291,29 @@ def upload_multipart(s3_key, large_file):
 
     args = ['split', "--line-bytes=%u" % S3_MAX_PUT_SIZE, '--suffix-length=5',
             '-d', large_file, split_prefix]
-    log.debug(' '.join(pipes.quote(arg) for arg in args))
+    log.info(' '.join(pipes.quote(arg) for arg in args))
     subprocess.check_call(args)
 
     mp = s3_key.bucket.initiate_multipart_upload(s3_key.name)
-    log.debug('Multipart upload to %r' % s3_key)
+    log.info('Multipart upload to %r' % s3_key)
     for part, filename in enumerate(sorted(glob.glob(split_prefix + '*'))):
-        with open(filename, 'rb') as file:
-            for t in xrange(S3_ATTEMPTS):
-                try:
+        for t in xrange(S3_ATTEMPTS):
+            try:
+                with open(filename, 'rb') as part_file:
                     mp.upload_part_from_file(
-                        file,
+                        part_file,
                         part + 1,
                         cb=sleeping_callback(t),
                         num_cb=S3_THROTTLE
                     )  # counting starts at 1
                     log.debug('Part %s uploaded to %r' % (part + 1, s3_key))
                     break
-                except socket.error as e:
-                    log.warn('Part %s, upload attempt %s/%s: '
+            except socket.error as e:
+                log.warn('Part %s, upload attempt %s/%s: '
                              'upload_part_from_file raised %r' %
                             (part + 1, t, S3_ATTEMPTS, e))
-            else:
-                raise socket.error("Upload failed")
+        else:
+            raise socket.error("Upload failed")
 
     mp.complete_upload()
 
