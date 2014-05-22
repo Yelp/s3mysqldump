@@ -3,7 +3,6 @@ try:
 except ImportError:
     from distutils.core import setup
 
-import s3mysqldump
 
 setup(
     author='David Marin',
@@ -32,5 +31,5 @@ setup(
     py_modules=['s3mysqldump'],
     scripts=['bin/s3mysqldump'],
     url='http://github.com/Yelp/s3mysqldump',
-    version=s3mysqldump.__version__,
+    version='0.1',
 )
